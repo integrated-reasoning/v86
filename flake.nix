@@ -104,9 +104,12 @@
                     -I${wasi-sdk}/share/wasi-sysroot/include \
                     -o build/zstddeclib.o \
                     lib/zstd/zstddeclib.c
+
+                  # Create archive
+                  ${wasi-sdk}/bin/llvm-ar rcs build/libv86deps.a build/softfloat.o build/zstddeclib.o
                 '';
-                # Enable raw_ref_op feature
-                RUSTFLAGS = "-Z unstable-options --cfg feature=\"raw_ref_op\"";
+                # Enable raw_ref_op feature and link our C dependencies
+                RUSTFLAGS = "-Z unstable-options --cfg feature=\"raw_ref_op\" -L build -l static=v86deps";
               };
             })
           ];
