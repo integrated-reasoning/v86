@@ -17,35 +17,21 @@
           ];
         };
 
-        # Build wasi-sdk from source
+        # Download pre-built wasi-sdk
         wasi-sdk = pkgs.stdenv.mkDerivation {
           name = "wasi-sdk";
           version = "20";
 
-          src = pkgs.fetchFromGitHub {
-            owner = "WebAssembly";
-            repo = "wasi-sdk";
-            rev = "wasi-sdk-20";
-            sha256 = "sha256-OEwGJjUKgTNmVLxHoGXPNZRQc/4xhcGE4ZvKvjZWuZ4=";
-            fetchSubmodules = true;
+          src = pkgs.fetchurl {
+            url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-20/wasi-sdk-20.0-macos.tar.gz";
+            sha256 = "sha256-2Zt/5wGGDrY7OJEEcHFDtbgTvhTgTMsLZJXHGOBXVQM=";
           };
 
-          nativeBuildInputs = with pkgs; [
-            cmake
-            ninja
-            python3
-            git
-          ];
-
-          buildPhase = ''
-            # Build only the sysroot
-            cd wasi-sysroot
-            make NINJA_FLAGS=-v PREFIX=$out
-          '';
+          dontBuild = true;
 
           installPhase = ''
             mkdir -p $out
-            cp -r build/wasi-sysroot/* $out/
+            cp -r wasi-sdk-20.0/* $out/
           '';
         };
 
@@ -107,7 +93,7 @@
                   ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
                     --target=wasm32-wasi -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
                     -DSOFTFLOAT_FAST_INT64 -DINLINE_LEVEL=5 -DSOFTFLOAT_FAST_DIV32TO16 -DSOFTFLOAT_FAST_DIV64TO32 \
-                    --sysroot=${wasi-sdk} \
+                    --sysroot=${wasi-sdk}/share/wasi-sysroot \
                     -o build/softfloat.o \
                     lib/softfloat/softfloat.c
 
@@ -115,7 +101,7 @@
                   ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
                     --target=wasm32-wasi -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
                     -DZSTDLIB_VISIBILITY="" \
-                    --sysroot=${wasi-sdk} \
+                    --sysroot=${wasi-sdk}/share/wasi-sysroot \
                     -o build/zstddeclib.o \
                     lib/zstd/zstddeclib.c
                 '';
