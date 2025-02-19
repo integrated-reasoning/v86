@@ -41,7 +41,7 @@
                   which
                 ]);
                 # Add code generation phase
-                preBuildPhases = (drv.preBuildPhases or []) ++ [ "generateCode" ];
+                preBuildPhases = (drv.preBuildPhases or []) ++ [ "generateCode" "buildCDeps" ];
                 generateCode = ''
                   # Set up environment
                   export NODE=${pkgs.nodejs}/bin/node
@@ -68,6 +68,22 @@
                       exit 1
                     fi
                   done
+                '';
+                buildCDeps = ''
+                  # Build softfloat
+                  mkdir -p build
+                  ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
+                    --target=wasm32 -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
+                    -DSOFTFLOAT_FAST_INT64 -DINLINE_LEVEL=5 -DSOFTFLOAT_FAST_DIV32TO16 -DSOFTFLOAT_FAST_DIV64TO32 \
+                    -o build/softfloat.o \
+                    lib/softfloat/softfloat.c
+
+                  # Build zstd
+                  ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
+                    --target=wasm32 -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
+                    -DZSTDLIB_VISIBILITY="" \
+                    -o build/zstddeclib.o \
+                    lib/zstd/zstddeclib.c
                 '';
                 # Enable raw_ref_op feature
                 RUSTFLAGS = "-Z unstable-options --cfg feature=\"raw_ref_op\"";
