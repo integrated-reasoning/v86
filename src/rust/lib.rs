@@ -1,4 +1,5 @@
 #![allow(const_item_mutation)]
+#![feature(raw_ref_op)]
 
 #[macro_use]
 mod dbg;
