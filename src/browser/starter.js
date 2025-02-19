@@ -1,5 +1,3 @@
-"use strict";
-
 /**
  * Constructor for emulator instances.
  *
@@ -16,6 +14,7 @@
  *
  * - `disable_keyboard boolean` (false) - If the keyboard should be disabled.
  * - `disable_mouse boolean` (false) - If the mouse should be disabled.
+ * - `disable_speaker boolean` (false) - If the speaker should be disabled.
  *
  * - `network_relay_url string` (No network card) - The url of a server running
  *   websockproxy. See [networking.md](networking.md). Setting this will
@@ -99,6 +98,8 @@
  * @param {{
       disable_mouse: (boolean|undefined),
       disable_keyboard: (boolean|undefined),
+      disable_speaker: (boolean|undefined),
+      log_level: (number|undefined),
       wasm_fn: (Function|undefined),
       screen: ({
           scale: (number|undefined),
@@ -109,12 +110,6 @@
  */
 function V86(options)
 {
-    if(typeof options.log_level === "number")
-    {
-        // XXX: Shared between all emulator instances
-        LOG_LEVEL = options.log_level;
-    }
-
     //var worker = new Worker("src/browser/worker.js");
     //var adapter_bus = this.bus = WorkerBus.init(worker);
 
