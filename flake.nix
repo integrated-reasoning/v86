@@ -20,7 +20,6 @@
         # Create a cargo2nix project
         rustPkgs = pkgs.rustBuilder.makePackageSet {
           rustChannel = "nightly";
-          rustVersion = "2024-02-18";
           packageFun = import ./Cargo.nix;
           packageOverrides = pkgs: pkgs.rustBuilder.overrides.all ++ [
             (pkgs.rustBuilder.rustLib.makeOverride {
