@@ -57,7 +57,7 @@
                   which
                 ]);
                 # Add code generation phase
-                preBuildPhases = (drv.preBuildPhases or []) ++ [ "generateCode" ];
+                preBuildPhases = (drv.preBuildPhases or []) ++ [ "generateCode" "buildCDeps" ];
                 generateCode = ''
                   # Set up environment
                   export NODE=${pkgs.nodejs}/bin/node
@@ -85,8 +85,27 @@
                     fi
                   done
                 '';
-                # Enable raw_ref_op feature
-                RUSTFLAGS = "-Z unstable-options --cfg feature=\"raw_ref_op\"";
+                buildCDeps = ''
+                  # Build softfloat
+                  mkdir -p build
+                  ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
+                    -O3 -fPIC -fvisibility=hidden -ffunction-sections -fdata-sections \
+                    -DSOFTFLOAT_FAST_INT64 -DINLINE_LEVEL=5 -DSOFTFLOAT_FAST_DIV32TO16 -DSOFTFLOAT_FAST_DIV64TO32 \
+                    -o build/softfloat.o \
+                    lib/softfloat/softfloat.c
+
+                  # Build zstd
+                  ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
+                    -O3 -fPIC -fvisibility=hidden -ffunction-sections -fdata-sections \
+                    -DZSTDLIB_VISIBILITY="" \
+                    -o build/zstddeclib.o \
+                    lib/zstd/zstddeclib.c
+
+                  # Create archive
+                  ${pkgs.llvmPackages_16.bintools-unwrapped}/bin/ar rcs build/libv86deps.a build/softfloat.o build/zstddeclib.o
+                '';
+                # Enable raw_ref_op feature and link our C dependencies
+                RUSTFLAGS = "-Z unstable-options --cfg feature=\"raw_ref_op\" -L build -l static=v86deps";
               };
             })
           ];
