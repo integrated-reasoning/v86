@@ -104,6 +104,10 @@
       screen: ({
           scale: (number|undefined),
       } | undefined),
+      vmEffect: ({
+          url: (string|undefined),
+          token: (string|undefined),
+      } | undefined),
     }} options
  * @constructor
  * @export
@@ -325,6 +329,10 @@ V86.prototype.continue_init = async function(emulator, options)
         {
             this.network_adapter = new NetworkAdapter(relay_url, this.bus);
         }
+    }
+    else if(options.vmEffect)
+    {
+        this.network_adapter = new VMEffectNetworkAdapter(options.vmEffect.url, options.vmEffect.token, this.bus);
     }
 
     // Enable unconditionally, so that state images don't miss hardware

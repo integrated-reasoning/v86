@@ -2702,3 +2702,46 @@
     }
 
 })();
+
+function init_network(settings)
+{
+    var net;
+    
+    if(settings.network_adapter)
+    {
+        if(typeof settings.network_adapter === "object")
+        {
+            net = new NetworkAdapter(settings.network_adapter);
+        }
+        else
+        {
+            net = new NetworkAdapter({
+                url: settings.network_adapter,
+                bus: bus,
+                mac_address: settings.mac_address
+            });
+        }
+    }
+    else if(settings.vmEffect)
+    {
+        net = new NetworkAdapter({
+            url: settings.vmEffect.url,
+            bus: bus,
+            mac_address: settings.mac_address,
+            vmEffect: true,
+            vmEffectToken: settings.vmEffect.token
+        });
+    }
+    
+    if(net)
+    {
+        devices.push({
+            type: "ne2k",
+            pci: false,
+            id: settings.network_id || 0,
+            mac_address: settings.mac_address || undefined,
+            bus: bus,
+            network_adapter: net
+        });
+    }
+}

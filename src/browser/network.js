@@ -8,15 +8,51 @@
  *
  * @constructor
  *
- * @param {string} url
- * @param {BusConnector} bus
- * @param {number} [id=0] id
+ * @param {object} options
+ * @param {string} options.url
+ * @param {BusConnector} options.bus
+ * @param {number} [options.id=0] id
+ * @param {boolean} [options.vmEffect=false] vmEffect
+ * @param {string} [options.vmEffectToken] vmEffectToken
+ * @param {string} [options.mac_address] mac_address
  */
-function NetworkAdapter(url, bus, id)
+function NetworkAdapter(options)
 {
-    this.bus = bus;
+    var url = options.url;
+    
+    if(!url)
+    {
+        return;
+    }
+
+    // Support for vmEffect networking
+    if(options.vmEffect)
+    {
+        this.adapter = new VMEffectNetworkAdapter({
+            url: url,
+            token: options.vmEffectToken,
+            macAddress: options.mac_address,
+            onPacket: (data) => {
+                this.handle_packet(data);
+            }
+        });
+        
+        this.send_packet = function(data)
+        {
+            this.adapter.send(data);
+        };
+        
+        this.destroy = function()
+        {
+            this.adapter.destroy();
+        };
+        
+        return;
+    }
+
+    this.bus = options.bus;
     this.socket = undefined;
-    this.id = id || 0;
+    this.id = options.id || 0;
 
     // TODO: circular buffer?
     this.send_queue = [];
