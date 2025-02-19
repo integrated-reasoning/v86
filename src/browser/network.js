@@ -1,5 +1,7 @@
 "use strict";
 
+import DerpNetworkAdapter from "./derp_network_adapter.js";
+
 /**
  * Network adapter implementation
  *
@@ -11,7 +13,8 @@
  *     id: (number|undefined),
  *     vmEffect: (boolean|undefined),
  *     vmEffectToken: (string|undefined),
- *     mac_address: (string|undefined)
+ *     mac_address: (string|undefined),
+ *     type: (string|undefined)
  * }} options
  */
 function NetworkAdapter(options)
@@ -20,6 +23,31 @@ function NetworkAdapter(options)
     
     if(!url)
     {
+        return;
+    }
+
+    // Support for DERP networking
+    if(options.type === "derp")
+    {
+        this.adapter = new DerpNetworkAdapter({
+            relay_url: url,
+            mac_address: options.mac_address,
+        });
+        
+        this.adapter.receive((data) => {
+            this.handle_packet(data);
+        });
+        
+        this.send_packet = function(data)
+        {
+            this.adapter.send(data);
+        };
+        
+        this.destroy = function()
+        {
+            this.adapter.disconnect();
+        };
+        
         return;
     }
 

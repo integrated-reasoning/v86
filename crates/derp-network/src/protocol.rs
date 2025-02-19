@@ -1,315 +1,238 @@
 use serde::{Serialize, Deserialize};
-use uuid::Uuid;
-use super::error::{DerpError, DerpResult};
-use miniz_oxide::deflate::compress_to_vec;
-use miniz_oxide::inflate::decompress_to_vec;
+use wasm_bindgen::prelude::*;
+use js_sys::{Uint8Array, Object};
+use web_sys::WebSocket;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use crate::crypto::CryptoState;
+use crate::error::DerpResult;
+
+const PROTOCOL_VERSION: u8 = 1;
+const FRAME_HEADER_SIZE: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(u8)]
 pub enum FrameType {
     ServerKey = 1,
-    ServerInfo = 2,
-    ClientInfo = 3,
-    Ping = 4,
-    Pong = 5,
-    Send = 6,
-    RecvFromPeer = 7,
+    ClientInfo = 2,
+    ServerInfo = 3,
+    SendPacket = 4,
+    RecvPacket = 5,
+    PeerPresent = 6,
+    PeerGone = 7,
+    KeepAlive = 8,
 }
 
-impl TryFrom<u8> for FrameType {
-    type Error = DerpError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            1 => Ok(FrameType::ServerKey),
-            2 => Ok(FrameType::ServerInfo),
-            3 => Ok(FrameType::ClientInfo),
-            4 => Ok(FrameType::Ping),
-            5 => Ok(FrameType::Pong),
-            6 => Ok(FrameType::Send),
-            7 => Ok(FrameType::RecvFromPeer),
-            _ => Err(DerpError::InvalidProtocol(format!("Invalid frame type: {}", value))),
-        }
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Frame {
+    version: u8,
+    frame_type: u8,
+    flags: u8,
+    payload: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum HandshakeState {
-    Initial,
-    AwaitingServerKey,
-    AwaitingServerInfo,
-    Complete,
-    Failed(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ClientInfo {
-    pub version: String,
-    pub client_id: String,
-    pub supported_features: Vec<String>,
-    pub max_packet_size: u32,
+    version: u8,
+    token: String,
+    mac_address: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ServerInfo {
-    pub version: String,
-    pub server_id: String,
-    pub supported_versions: Vec<String>,
-    pub supported_features: Vec<String>,
-    pub max_packet_size: u32,
-    pub keepalive_interval: u32,
+    version: u8,
+    name: String,
+    region: String,
 }
 
-pub struct ProtocolState {
-    pub handshake_state: HandshakeState,
-    client_info: Option<ClientInfo>,
-    server_info: Option<ServerInfo>,
-    last_ping_time: Option<std::time::Instant>,
-    supported_features: Vec<String>,
-    compression_enabled: bool,
+#[wasm_bindgen]
+pub struct DerpProtocol {
+    crypto: Arc<CryptoState>,
+    peers: Arc<Mutex<HashMap<String, PeerState>>>,
+    ws: Option<WebSocket>,
+    session_key: Option<Vec<u8>>,
 }
 
-impl ProtocolState {
-    pub fn new() -> Self {
-        ProtocolState {
-            handshake_state: HandshakeState::Initial,
-            client_info: None,
-            server_info: None,
-            last_ping_time: None,
-            supported_features: vec![
-                "compression".to_string(),
-                "encryption".to_string(),
-                "ipv6".to_string(),
-            ],
-            compression_enabled: false,
+#[derive(Debug)]
+struct PeerState {
+    last_seen: f64, // JavaScript timestamp
+    public_key: Vec<u8>,
+}
+
+#[wasm_bindgen]
+impl DerpProtocol {
+    #[wasm_bindgen(constructor)]
+    pub fn new(crypto: Arc<CryptoState>) -> Self {
+        DerpProtocol {
+            crypto,
+            peers: Arc::new(Mutex::new(HashMap::new())),
+            ws: None,
+            session_key: None,
         }
     }
 
-    pub fn is_connected(&self) -> bool {
-        matches!(self.handshake_state, HandshakeState::Complete)
-    }
-
-    pub fn start_handshake(&mut self) -> DerpResult<Vec<u8>> {
-        if !matches!(self.handshake_state, HandshakeState::Initial) {
-            return Err(DerpError::InvalidState("Handshake already started".into()));
-        }
-
-        self.handshake_state = HandshakeState::AwaitingServerKey;
-        
-        let client_info = ClientInfo {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            client_id: Uuid::new_v4().to_string(),
-            supported_features: self.supported_features.clone(),
-            max_packet_size: 16384, // 16KB default max packet size
-        };
-        
-        self.client_info = Some(client_info.clone());
-        
-        Ok(self.encode_frame(FrameType::ClientInfo, &bincode::serialize(&client_info)?))
-    }
-
-    pub fn handle_server_key(&mut self, payload: Vec<u8>) -> DerpResult<Vec<u8>> {
-        if !matches!(self.handshake_state, HandshakeState::AwaitingServerKey) {
-            return Err(DerpError::InvalidState("Unexpected server key".into()));
-        }
-
-        if payload.len() != 32 {
-            return Err(DerpError::InvalidProtocol("Invalid server key length".into()));
-        }
-
-        self.handshake_state = HandshakeState::AwaitingServerInfo;
-        Ok(vec![])
-    }
-
-    pub fn handle_server_info(&mut self, payload: Vec<u8>) -> DerpResult<Vec<u8>> {
-        if !matches!(self.handshake_state, HandshakeState::AwaitingServerInfo) {
-            return Err(DerpError::InvalidState("Unexpected server info".into()));
-        }
-
-        let server_info: ServerInfo = bincode::deserialize(&payload)
-            .map_err(|e| DerpError::InvalidProtocol(format!("Invalid server info: {}", e)))?;
-
-        // Validate server version compatibility
-        if !server_info.supported_versions.contains(&env!("CARGO_PKG_VERSION").to_string()) {
-            return Err(DerpError::InvalidProtocol(format!(
-                "Incompatible server version. Server supports: {:?}",
-                server_info.supported_versions
-            )));
-        }
-
-        // Check feature compatibility
-        let client_features = &self.supported_features;
-        let common_features: Vec<_> = server_info.supported_features.iter()
-            .filter(|f| client_features.contains(&f.to_string()))
-            .collect();
-
-        if common_features.is_empty() {
-            return Err(DerpError::InvalidProtocol(
-                "No compatible features between client and server".into()
-            ));
-        }
-
-        // Enable compression if both sides support it
-        self.compression_enabled = common_features.iter().any(|f| *f == "compression");
-
-        self.server_info = Some(server_info);
-        self.handshake_state = HandshakeState::Complete;
-        Ok(vec![])
-    }
-
-    pub fn handle_ping(&mut self) -> Vec<u8> {
-        self.last_ping_time = Some(std::time::Instant::now());
-        self.encode_frame(FrameType::Pong, &[])
-    }
-
-    pub fn encode_frame(&self, frame_type: FrameType, payload: &[u8]) -> Vec<u8> {
-        let mut frame = Vec::with_capacity(payload.len() + 5);
-        frame.push(frame_type as u8);
-
-        let compressed_payload = if self.compression_enabled && payload.len() > 64 {
-            compress_to_vec(payload, 6)
-        } else {
-            payload.to_vec()
-        };
-
-        frame.extend_from_slice(&(compressed_payload.len() as u32).to_be_bytes());
-        frame.extend_from_slice(&compressed_payload);
+    pub fn create_frame(&self, frame_type: u8, payload: &[u8]) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(FRAME_HEADER_SIZE + payload.len());
+        frame.push(PROTOCOL_VERSION);
+        frame.push(frame_type);
+        frame.push(0); // flags
+        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+        frame.extend_from_slice(payload);
         frame
     }
 
-    pub fn decode_frame(data: &[u8]) -> DerpResult<(FrameType, Vec<u8>)> {
-        if data.len() < 5 {
-            return Err(DerpError::InvalidProtocol("Frame too short".into()));
+    pub fn decode_frame_header(&self, data: &[u8]) -> DerpResult<(u8, u8, u8, usize)> {
+        if data.len() < FRAME_HEADER_SIZE {
+            return Err("Frame too short".into());
         }
 
-        let frame_type = FrameType::try_from(data[0])?;
-        let payload_len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+        let version = data[0];
+        let frame_type = data[1];
+        let flags = data[2];
+        let length = ((data[3] as usize) << 8) | (data[4] as usize);
 
-        if data.len() < payload_len + 5 {
-            return Err(DerpError::InvalidProtocol("Incomplete frame".into()));
+        Ok((version, frame_type, flags, length))
+    }
+
+    #[wasm_bindgen(js_name = handleServerKey)]
+    pub async fn handle_server_key(&mut self, key: &[u8]) -> DerpResult<()> {
+        if key.len() != 32 {
+            return Err("Invalid server key length".into());
         }
 
-        let payload = &data[5..5 + payload_len];
+        self.session_key = Some(self.crypto.derive_session_key(key).await?);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = createClientInfo)]
+    pub async fn create_client_info(&self, info: JsValue) -> DerpResult<Uint8Array> {
+        let client_info: ClientInfo = serde_wasm_bindgen::from_value(info)?;
+        let data = serde_json::to_vec(&client_info)?;
+        let encrypted = self.crypto.encrypt(&data, &self.session_key.as_ref().ok_or("No session key")?).await?;
         
-        // Try to decompress if it looks like compressed data
-        let decompressed = if payload.len() > 2 && frame_type != FrameType::Ping && frame_type != FrameType::Pong {
-            decompress_to_vec(payload).unwrap_or(payload.to_vec())
-        } else {
-            payload.to_vec()
-        };
-
-        Ok((frame_type, decompressed))
+        let frame = self.create_frame(FrameType::ClientInfo as u8, &encrypted);
+        Ok(Uint8Array::from(&frame[..]))
     }
 
-    pub fn get_keepalive_interval(&self) -> Option<u32> {
-        self.server_info.as_ref().map(|info| info.keepalive_interval)
+    #[wasm_bindgen(js_name = handleServerInfo)]
+    pub async fn handle_server_info(&self, payload: &[u8]) -> DerpResult<JsValue> {
+        let decrypted = self.crypto.decrypt(payload, &self.session_key.as_ref().ok_or("No session key")?).await?;
+        let info: ServerInfo = serde_json::from_slice(&decrypted)?;
+        Ok(serde_wasm_bindgen::to_value(&info)?)
     }
 
-    pub fn should_send_ping(&self) -> bool {
-        if let (Some(server_info), Some(last_ping)) = (&self.server_info, self.last_ping_time) {
-            let elapsed = last_ping.elapsed().as_secs() as u32;
-            elapsed >= server_info.keepalive_interval
-        } else {
-            false
+    #[wasm_bindgen(js_name = handlePeerState)]
+    pub fn handle_peer_state(&self, frame_type: u8, payload: &[u8]) -> DerpResult<()> {
+        if payload.len() != 32 {
+            return Err("Invalid peer key length".into());
         }
+
+        let peer_key = hex::encode(payload);
+        let mut peers = self.peers.lock().map_err(|_| "Failed to lock peers")?;
+
+        match frame_type {
+            x if x == FrameType::PeerPresent as u8 => {
+                peers.insert(peer_key, PeerState {
+                    last_seen: js_sys::Date::now(),
+                    public_key: payload.to_vec(),
+                });
+            }
+            x if x == FrameType::PeerGone as u8 => {
+                peers.remove(&peer_key);
+            }
+            _ => return Err("Invalid peer state frame type".into())
+        }
+
+        Ok(())
     }
 
-    pub fn is_compression_enabled(&self) -> bool {
-        self.compression_enabled
+    #[wasm_bindgen(js_name = createPacketFrame)]
+    pub fn create_packet_frame(&self, packet: &[u8], dest_key: &[u8]) -> DerpResult<Uint8Array> {
+        if dest_key.len() != 32 {
+            return Err("Invalid destination key length".into());
+        }
+
+        let mut payload = Vec::with_capacity(32 + packet.len());
+        payload.extend_from_slice(dest_key);
+        payload.extend_from_slice(packet);
+
+        let frame = self.create_frame(FrameType::SendPacket as u8, &payload);
+        Ok(Uint8Array::from(&frame[..]))
+    }
+
+    #[wasm_bindgen(js_name = handleRecvPacket)]
+    pub fn handle_recv_packet(&self, payload: &[u8]) -> DerpResult<Object> {
+        if payload.len() < 32 {
+            return Err("Invalid packet payload length".into());
+        }
+
+        let (src_key, packet) = payload.split_at(32);
+        let result = Object::new();
+
+        js_sys::Reflect::set(
+            &result,
+            &JsValue::from_str("srcKey"),
+            &JsValue::from_str(&hex::encode(src_key))
+        )?;
+
+        js_sys::Reflect::set(
+            &result,
+            &JsValue::from_str("packet"),
+            &Uint8Array::from(packet)
+        )?;
+
+        Ok(result)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wasm_bindgen_test::*;
 
-    #[test]
-    fn test_frame_encoding() {
-        let protocol = ProtocolState::new();
-        let payload = b"test data";
-        let frame = protocol.encode_frame(FrameType::Send, payload);
-        
-        assert_eq!(frame[0], FrameType::Send as u8);
-        let len = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
-        assert_eq!(&frame[5..5+len], payload);
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    async fn create_test_protocol() -> DerpProtocol {
+        let crypto = CryptoState::new().unwrap();
+        DerpProtocol::new(Arc::new(crypto))
     }
 
-    #[test]
-    fn test_frame_decoding() {
-        let mut frame = vec![FrameType::Send as u8];
-        let payload = b"test data";
-        frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        frame.extend_from_slice(payload);
+    #[wasm_bindgen_test]
+    async fn test_frame_creation() {
+        let protocol = create_test_protocol().await;
+        let payload = vec![1, 2, 3, 4];
+        let frame = protocol.create_frame(FrameType::SendPacket as u8, &payload);
         
-        let (frame_type, decoded_payload) = ProtocolState::decode_frame(&frame).unwrap();
-        assert_eq!(frame_type, FrameType::Send);
-        assert_eq!(decoded_payload, payload);
+        let (version, frame_type, flags, length) = protocol.decode_frame_header(&frame).unwrap();
+        assert_eq!(version, PROTOCOL_VERSION);
+        assert_eq!(frame_type, FrameType::SendPacket as u8);
+        assert_eq!(length, payload.len());
     }
 
-    #[test]
-    fn test_compression() {
-        let mut protocol = ProtocolState::new();
-        protocol.compression_enabled = true;
-
-        // Create a payload that would benefit from compression
-        let payload = vec![b'a'; 1000];
-        let frame = protocol.encode_frame(FrameType::Send, &payload);
+    #[wasm_bindgen_test]
+    async fn test_server_key_handling() {
+        let mut protocol = create_test_protocol().await;
+        let server_key = vec![0u8; 32];
         
-        // The compressed frame should be smaller than the original payload
-        let frame_len = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
-        assert!(frame_len < payload.len());
-
-        // Decoding should give us back the original payload
-        let (frame_type, decoded_payload) = ProtocolState::decode_frame(&frame).unwrap();
-        assert_eq!(frame_type, FrameType::Send);
-        assert_eq!(decoded_payload, payload);
+        protocol.handle_server_key(&server_key).await.unwrap();
+        assert!(protocol.session_key.is_some());
     }
 
-    #[test]
-    fn test_small_payload_no_compression() {
-        let mut protocol = ProtocolState::new();
-        protocol.compression_enabled = true;
-
-        // Small payload shouldn't be compressed
-        let payload = b"small";
-        let frame = protocol.encode_frame(FrameType::Send, payload);
+    #[wasm_bindgen_test]
+    async fn test_peer_state() {
+        let protocol = create_test_protocol().await;
+        let peer_key = vec![0u8; 32];
         
-        let frame_len = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
-        assert_eq!(frame_len, payload.len());
-
-        let (frame_type, decoded_payload) = ProtocolState::decode_frame(&frame).unwrap();
-        assert_eq!(frame_type, FrameType::Send);
-        assert_eq!(decoded_payload, payload);
-    }
-
-    #[test]
-    fn test_handshake_flow() {
-        let mut protocol = ProtocolState::new();
+        protocol.handle_peer_state(FrameType::PeerPresent as u8, &peer_key).unwrap();
         
-        // Start handshake
-        let _ = protocol.start_handshake().unwrap();
-        assert!(matches!(protocol.handshake_state, HandshakeState::AwaitingServerKey));
+        let peers = protocol.peers.lock().unwrap();
+        assert!(peers.contains_key(&hex::encode(&peer_key)));
         
-        // Handle server key
-        let _ = protocol.handle_server_key(vec![0; 32]).unwrap();
-        assert!(matches!(protocol.handshake_state, HandshakeState::AwaitingServerInfo));
+        drop(peers);
         
-        // Handle server info
-        let server_info = ServerInfo {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            server_id: Uuid::new_v4().to_string(),
-            supported_versions: vec![env!("CARGO_PKG_VERSION").to_string()],
-            supported_features: vec![
-                "compression".to_string(),
-                "encryption".to_string(),
-                "ipv6".to_string(),
-            ],
-            max_packet_size: 16384,
-            keepalive_interval: 30,
-        };
-        let server_info_data = bincode::serialize(&server_info).unwrap();
-        let _ = protocol.handle_server_info(server_info_data).unwrap();
+        protocol.handle_peer_state(FrameType::PeerGone as u8, &peer_key).unwrap();
         
-        assert!(matches!(protocol.handshake_state, HandshakeState::Complete));
-        assert!(protocol.is_compression_enabled());
+        let peers = protocol.peers.lock().unwrap();
+        assert!(!peers.contains_key(&hex::encode(&peer_key)));
     }
 }
