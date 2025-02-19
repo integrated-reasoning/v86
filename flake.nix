@@ -19,7 +19,8 @@
 
         # Create a cargo2nix project
         rustPkgs = pkgs.rustBuilder.makePackageSet {
-          rustVersion = "1.75.0";
+          rustChannel = "nightly";
+          rustVersion = "2024-02-18";
           packageFun = import ./Cargo.nix;
           packageOverrides = pkgs: pkgs.rustBuilder.overrides.all ++ [
             (pkgs.rustBuilder.rustLib.makeOverride {
@@ -69,6 +70,8 @@
                     fi
                   done
                 '';
+                # Enable raw_ref_op feature
+                RUSTFLAGS = "-Z unstable-options --cfg feature=\"raw_ref_op\"";
               };
             })
           ];
