@@ -31,7 +31,7 @@
 
           installPhase = ''
             mkdir -p $out
-            cp -r wasi-sdk-20.0/* $out/
+            cp -r . $out/
           '';
         };
 
