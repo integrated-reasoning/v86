@@ -24,7 +24,7 @@
 
           src = pkgs.fetchurl {
             url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-20/wasi-sdk-20.0-macos.tar.gz";
-            sha256 = "sha256-2Zt/5wGGDrY7OJEEcHFDtbgTvhTgTMsLZJXHGOBXVQM=";
+            sha256 = "sha256-j+okNPBQYuo22WBHi6hrmhcMxxheB2W/tJ0kuymjlGY=";
           };
 
           dontBuild = true;
