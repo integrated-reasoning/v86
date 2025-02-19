@@ -17,6 +17,38 @@
           ];
         };
 
+        # Build wasi-sdk from source
+        wasi-sdk = pkgs.stdenv.mkDerivation {
+          name = "wasi-sdk";
+          version = "20";
+
+          src = pkgs.fetchFromGitHub {
+            owner = "WebAssembly";
+            repo = "wasi-sdk";
+            rev = "wasi-sdk-20";
+            sha256 = "sha256-OEwGJjUKgTNmVLxHoGXPNZRQc/4xhcGE4ZvKvjZWuZ4=";
+            fetchSubmodules = true;
+          };
+
+          nativeBuildInputs = with pkgs; [
+            cmake
+            ninja
+            python3
+            git
+          ];
+
+          buildPhase = ''
+            # Build only the sysroot
+            cd wasi-sysroot
+            make NINJA_FLAGS=-v PREFIX=$out
+          '';
+
+          installPhase = ''
+            mkdir -p $out
+            cp -r build/wasi-sysroot/* $out/
+          '';
+        };
+
         # Create a cargo2nix project
         rustPkgs = pkgs.rustBuilder.makePackageSet {
           rustChannel = "nightly";
@@ -73,15 +105,17 @@
                   # Build softfloat
                   mkdir -p build
                   ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
-                    --target=wasm32 -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
+                    --target=wasm32-wasi -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
                     -DSOFTFLOAT_FAST_INT64 -DINLINE_LEVEL=5 -DSOFTFLOAT_FAST_DIV32TO16 -DSOFTFLOAT_FAST_DIV64TO32 \
+                    --sysroot=${wasi-sdk} \
                     -o build/softfloat.o \
                     lib/softfloat/softfloat.c
 
                   # Build zstd
                   ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
-                    --target=wasm32 -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
+                    --target=wasm32-wasi -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
                     -DZSTDLIB_VISIBILITY="" \
+                    --sysroot=${wasi-sdk} \
                     -o build/zstddeclib.o \
                     lib/zstd/zstddeclib.c
                 '';
