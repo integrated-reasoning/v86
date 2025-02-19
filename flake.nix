@@ -90,18 +90,18 @@
                 buildCDeps = ''
                   # Build softfloat
                   mkdir -p build
-                  ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
-                    --target=wasm32-wasi -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
+                  ${wasi-sdk}/bin/clang -c -Wall \
+                    -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
                     -DSOFTFLOAT_FAST_INT64 -DINLINE_LEVEL=5 -DSOFTFLOAT_FAST_DIV32TO16 -DSOFTFLOAT_FAST_DIV64TO32 \
-                    --sysroot=${wasi-sdk}/share/wasi-sysroot \
+                    -I${wasi-sdk}/share/wasi-sysroot/include \
                     -o build/softfloat.o \
                     lib/softfloat/softfloat.c
 
                   # Build zstd
-                  ${pkgs.llvmPackages_16.clang-unwrapped}/bin/clang -c -Wall \
-                    --target=wasm32-wasi -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
+                  ${wasi-sdk}/bin/clang -c -Wall \
+                    -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
                     -DZSTDLIB_VISIBILITY="" \
-                    --sysroot=${wasi-sdk}/share/wasi-sysroot \
+                    -I${wasi-sdk}/share/wasi-sysroot/include \
                     -o build/zstddeclib.o \
                     lib/zstd/zstddeclib.c
                 '';
