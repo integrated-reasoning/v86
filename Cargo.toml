@@ -1,7 +1,13 @@
+[workspace]
+members = [
+    "crates/derp-network"
+]
+
 [package]
 name = "v86"
 version = "0.1.0"
 publish = false
+edition = "2021"
 
 [features]
 default = []
@@ -27,3 +33,29 @@ lto = true
 opt-level = 3
 incremental = false
 panic = "abort"
+
+[dependencies]
+aes-gcm = "0.10"  # AES-GCM encryption
+hmac = "0.12"  # HMAC
+sha2 = "0.10"  # SHA-256
+getrandom = { version = "0.2", features = ["js"] }  # Random number generation for WASM
+wasm-bindgen = "0.2.87"  # WASM bindings
+js-sys = "0.3.64"  # JavaScript interop
+web-sys = { version = "0.3.64", features = [
+    "WebSocket",
+    "MessageEvent",
+    "BinaryType",
+    "Blob",
+    "ErrorEvent",
+    "CloseEvent",
+    "Window"
+]}
+serde = { version = "1.0", features = ["derive"] }  # Serialization
+serde_json = "1.0"  # JSON handling
+base64 = "0.21"  # Base64 encoding/decoding
+serde-wasm-bindgen = "0.6"
+wasm-bindgen-futures = "0.4"
+uuid = { version = "1.0", features = ["v4", "js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.37"  # Testing framework for WASM

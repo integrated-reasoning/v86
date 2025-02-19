@@ -29,6 +29,20 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
+        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+          targets = [ "wasm32-unknown-unknown" ];
+          extensions = [ "rust-src" ];
+        };
+
+        nativeBuildInputs = with pkgs; [
+          rustToolchain
+          wasm-pack
+          pkg-config
+          libiconv
+          nodejs
+          binaryen # for wasm-opt
+        ];
+
         alpineIso = pkgs.fetchurl {
           url = "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-standard-3.19.1-x86_64.iso";
           hash = "sha256-Y+YvWlLP5zpssTfsuxEbfUg1aGKh3+UNj92XfXJ9oZI=";
@@ -100,6 +114,11 @@
           buildInputs = with pkgs; [
             qemu
             p7zip
+            wasm-pack
+            pkg-config
+            libiconv
+            nodejs
+            binaryen # for wasm-opt
           ];
         };
       }

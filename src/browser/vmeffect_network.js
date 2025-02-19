@@ -1,240 +1,217 @@
-"use strict";
-
 /**
  * vmEffect WebSocket-based network adapter for v86
  * Implements secure networking through DERP relay infrastructure
  */
-class VMEffectNetworkAdapter {
-    constructor(options) {
-        this.url = options.url;
-        this.token = options.token;
-        this.onPacket = options.onPacket;
-        this.macAddress = options.macAddress;
+
+/**
+ * @constructor
+ * @param {{
+ *     url: string,
+ *     token: string,
+ *     macAddress: string,
+ *     onPacket: function(Uint8Array): void
+ * }} options
+ */
+function VMEffectNetworkAdapter(options)
+{
+    this.url = options.url;
+    this.token = options.token;
+    this.macAddress = options.macAddress;
+    this.onPacket = options.onPacket;
+    
+    // DERP state
+    this.derp = null;
+    this.keyPair = null;
+    
+    // Connection state
+    this.ws = null;
+    this.connected = false;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
+    this.reconnectDelay = 1000;
+    
+    // Statistics
+    this.stats = {
+        bytesSent: 0,
+        bytesReceived: 0,
+        packetsDropped: 0
+    };
+    
+    // Initialize
+    this.init();
+}
+
+VMEffectNetworkAdapter.prototype.init = async function()
+{
+    try {
+        // Generate key pair
+        this.keyPair = await DERPCrypto.generateKeyPair();
+        this.derp = new DERPProtocol(this.keyPair);
         
-        // Connection state
-        this.ws = null;
-        this.connected = false;
-        this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
-        this.reconnectDelay = 1000;
-        
-        // Session management
-        this.sessionToken = null;
-        this.refreshToken = null;
-        this.tokenRefreshTimeout = null;
-        
-        // Statistics
-        this.stats = {
-            bytesSent: 0,
-            bytesReceived: 0,
-            packetsDropped: 0,
-            latency: 0
-        };
-        
-        // Initialize
+        // Connect
         this.connect();
     }
-    
-    /**
-     * Establish WebSocket connection to DERP relay
-     */
-    connect() {
-        if (this.ws) {
-            return;
-        }
-        
-        this.ws = new WebSocket(this.url);
-        
-        this.ws.onopen = () => {
-            this.authenticate();
-        };
-        
-        this.ws.onmessage = (event) => {
-            this.handleMessage(event.data);
-        };
-        
-        this.ws.onclose = () => {
-            this.handleDisconnect();
-        };
-        
-        this.ws.onerror = (error) => {
-            console.error("VMEffect WebSocket error:", error);
-            this.stats.packetsDropped++;
-        };
+    catch(e) {
+        console.error("Failed to initialize VMEffect:", e);
+    }
+};
+
+VMEffectNetworkAdapter.prototype.connect = function()
+{
+    if(this.ws)
+    {
+        return;
     }
     
-    /**
-     * Authenticate with the DERP relay
-     */
-    authenticate() {
-        const authMessage = {
-            type: "auth",
+    this.ws = new WebSocket(this.url);
+    this.ws.binaryType = "arraybuffer";
+    
+    this.ws.onopen = () => {
+        // Wait for server key
+        console.log("VMEffect: Connected to DERP relay");
+    };
+    
+    this.ws.onmessage = async (event) => {
+        try {
+            const data = new Uint8Array(event.data);
+            const header = this.derp.decodeFrameHeader(data);
+            const payload = data.slice(FRAME_HEADER_LENGTH);
+            
+            switch(header.type) {
+                case FRAME_TYPES.SERVER_KEY:
+                    await this.handleServerKey(payload);
+                    break;
+                    
+                case FRAME_TYPES.SERVER_INFO:
+                    await this.handleServerInfo(payload);
+                    break;
+                    
+                case FRAME_TYPES.RECV_PACKET:
+                    this.handlePacket(payload);
+                    break;
+                    
+                case FRAME_TYPES.PEER_GONE:
+                case FRAME_TYPES.PEER_PRESENT:
+                    this.derp.handlePeerState(header.type, payload);
+                    break;
+                    
+                default:
+                    console.warn("Unknown frame type:", header.type);
+            }
+        }
+        catch(e) {
+            console.error("Failed to handle message:", e);
+            this.stats.packetsDropped++;
+        }
+    };
+    
+    this.ws.onclose = () => {
+        this.connected = false;
+        this.ws = null;
+        
+        if(this.reconnectAttempts < this.maxReconnectAttempts)
+        {
+            this.reconnectAttempts++;
+            setTimeout(() => this.connect(), this.reconnectDelay);
+        }
+    };
+    
+    this.ws.onerror = (error) => {
+        console.error("WebSocket error:", error);
+    };
+};
+
+VMEffectNetworkAdapter.prototype.handleServerKey = async function(payload)
+{
+    try {
+        this.derp.handleServerKey(payload);
+        
+        // Send client info
+        const info = {
+            version: PROTOCOL_VERSION,
             token: this.token,
             macAddress: this.macAddress
         };
         
-        this.ws.send(JSON.stringify(authMessage));
+        const clientInfo = await this.derp.createClientInfo(info);
+        this.ws.send(clientInfo);
     }
-    
-    /**
-     * Handle incoming messages from DERP relay
-     */
-    handleMessage(data) {
-        try {
-            const message = JSON.parse(data);
-            
-            switch (message.type) {
-                case "auth_response":
-                    this.handleAuthResponse(message);
-                    break;
-                    
-                case "packet":
-                    this.handlePacket(message);
-                    break;
-                    
-                case "token_refresh":
-                    this.handleTokenRefresh(message);
-                    break;
-                    
-                default:
-                    console.warn("Unknown message type:", message.type);
-            }
-        } catch (error) {
-            console.error("Error handling message:", error);
-        }
+    catch(e) {
+        console.error("Failed to handle server key:", e);
+        this.ws.close();
     }
-    
-    /**
-     * Handle authentication response
-     */
-    handleAuthResponse(message) {
-        if (message.success) {
-            this.connected = true;
-            this.sessionToken = message.sessionToken;
-            this.refreshToken = message.refreshToken;
-            
-            // Schedule token refresh
-            const refreshIn = (message.expiresIn - 300) * 1000; // Refresh 5 minutes before expiry
-            this.scheduleTokenRefresh(refreshIn);
-            
-            console.log("VMEffect authentication successful");
-        } else {
-            console.error("VMEffect authentication failed:", message.error);
-        }
+};
+
+VMEffectNetworkAdapter.prototype.handleServerInfo = async function(payload)
+{
+    try {
+        const info = await this.derp.handleServerInfo(payload);
+        console.log("VMEffect: Connected to DERP server:", info);
+        this.connected = true;
+        this.reconnectAttempts = 0;
     }
-    
-    /**
-     * Handle incoming network packet
-     */
-    handlePacket(message) {
-        const packet = new Uint8Array(message.data);
+    catch(e) {
+        console.error("Failed to handle server info:", e);
+        this.ws.close();
+    }
+};
+
+VMEffectNetworkAdapter.prototype.handlePacket = function(payload)
+{
+    try {
+        const { srcKey, packet } = this.derp.handleRecvPacket(payload);
         this.stats.bytesReceived += packet.length;
         this.onPacket(packet);
     }
-    
-    /**
-     * Handle token refresh response
-     */
-    handleTokenRefresh(message) {
-        if (message.success) {
-            this.sessionToken = message.sessionToken;
-            this.scheduleTokenRefresh((message.expiresIn - 300) * 1000);
-        } else {
-            console.error("Token refresh failed:", message.error);
-            this.reconnect();
-        }
+    catch(e) {
+        console.error("Failed to handle packet:", e);
+        this.stats.packetsDropped++;
     }
-    
-    /**
-     * Schedule token refresh
-     */
-    scheduleTokenRefresh(delay) {
-        if (this.tokenRefreshTimeout) {
-            clearTimeout(this.tokenRefreshTimeout);
-        }
-        
-        this.tokenRefreshTimeout = setTimeout(() => {
-            const refreshMessage = {
-                type: "token_refresh",
-                refreshToken: this.refreshToken
-            };
-            
-            this.ws.send(JSON.stringify(refreshMessage));
-        }, delay);
-    }
-    
-    /**
-     * Handle WebSocket disconnection
-     */
-    handleDisconnect() {
-        this.connected = false;
-        this.ws = null;
-        
-        if (this.tokenRefreshTimeout) {
-            clearTimeout(this.tokenRefreshTimeout);
-            this.tokenRefreshTimeout = null;
-        }
-        
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-            setTimeout(() => {
-                this.reconnectAttempts++;
-                this.connect();
-            }, this.reconnectDelay * Math.pow(2, this.reconnectAttempts));
-        } else {
-            console.error("Max reconnection attempts reached");
-        }
-    }
-    
-    /**
-     * Send network packet through DERP relay
-     */
-    send(data) {
-        if (!this.connected || !this.ws) {
-            this.stats.packetsDropped++;
-            return;
-        }
-        
-        const packet = {
-            type: "packet",
-            sessionToken: this.sessionToken,
-            data: Array.from(data)
-        };
-        
-        try {
-            this.ws.send(JSON.stringify(packet));
-            this.stats.bytesSent += data.length;
-        } catch (error) {
-            console.error("Error sending packet:", error);
-            this.stats.packetsDropped++;
-        }
-    }
-    
-    /**
-     * Get current network statistics
-     */
-    getStats() {
-        return { ...this.stats };
-    }
-    
-    /**
-     * Clean up resources
-     */
-    destroy() {
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
-        }
-        
-        if (this.tokenRefreshTimeout) {
-            clearTimeout(this.tokenRefreshTimeout);
-            this.tokenRefreshTimeout = null;
-        }
-    }
-}
+};
 
-// Export for v86 integration
-if (typeof module !== "undefined" && module.exports) {
-    module.exports = VMEffectNetworkAdapter;
-} else {
-    window.VMEffectNetworkAdapter = VMEffectNetworkAdapter;
+VMEffectNetworkAdapter.prototype.send = function(data)
+{
+    if(!this.connected || !this.derp)
+    {
+        this.stats.packetsDropped++;
+        return;
+    }
+    
+    try {
+        // For now, we broadcast to all peers
+        for(const [keyStr, peer] of this.derp.peerKeys)
+        {
+            const destKey = Buffer.from(keyStr, "hex");
+            const frame = this.derp.createPacketFrame(data, destKey);
+            this.ws.send(frame);
+            this.stats.bytesSent += data.length;
+        }
+    }
+    catch(e) {
+        console.error("Failed to send packet:", e);
+        this.stats.packetsDropped++;
+    }
+};
+
+VMEffectNetworkAdapter.prototype.getStats = function()
+{
+    return { ...this.stats };
+};
+
+VMEffectNetworkAdapter.prototype.destroy = function()
+{
+    if(this.ws)
+    {
+        this.ws.close();
+        this.ws = null;
+    }
+    
+    this.connected = false;
+    this.derp = null;
+    this.keyPair = null;
+};
+
+if(typeof module !== "undefined" && module.exports)
+{
+    module.exports = { VMEffectNetworkAdapter };
 }

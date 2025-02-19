@@ -1,20 +1,18 @@
 "use strict";
 
 /**
- * An ethernet-through-websocket adapter, to be used with
- *     https://github.com/benjamincburns/websockproxy
- *
- * emulated ethernet card <--> this <--> websocket proxy <--> network
+ * Network adapter implementation
  *
  * @constructor
  *
- * @param {object} options
- * @param {string} options.url
- * @param {BusConnector} options.bus
- * @param {number} [options.id=0] id
- * @param {boolean} [options.vmEffect=false] vmEffect
- * @param {string} [options.vmEffectToken] vmEffectToken
- * @param {string} [options.mac_address] mac_address
+ * @param {{
+ *     url: string,
+ *     bus: BusConnector,
+ *     id: (number|undefined),
+ *     vmEffect: (boolean|undefined),
+ *     vmEffectToken: (string|undefined),
+ *     mac_address: (string|undefined)
+ * }} options
  */
 function NetworkAdapter(options)
 {

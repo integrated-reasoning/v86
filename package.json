@@ -1,5 +1,14 @@
 {
   "name": "v86",
   "version": "0",
-  "license": "BSD-2-Clause"
+  "license": "BSD-2-Clause",
+  "scripts": {
+    "test": "mocha tests/browser/*.js",
+    "test:watch": "mocha tests/browser/*.js --watch"
+  },
+  "devDependencies": {
+    "mocha": "^10.2.0",
+    "jsdom": "^22.1.0",
+    "sinon": "^17.0.1"
+  }
 }
