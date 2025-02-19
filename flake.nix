@@ -40,36 +40,39 @@
                   python3
                   which
                 ]);
+                # Add code generation phase
+                preBuildPhases = (drv.preBuildPhases or []) ++ [ "generateCode" ];
+                generateCode = ''
+                  # Set up environment
+                  export NODE=${pkgs.nodejs}/bin/node
+
+                  # Create gen output directory
+                  mkdir -p src/rust/gen
+
+                  # Generate JIT code
+                  $NODE gen/generate_jit.js --table jit
+                  $NODE gen/generate_jit.js --table jit0f
+
+                  # Generate interpreter code
+                  $NODE gen/generate_interpreter.js --table interpreter
+                  $NODE gen/generate_interpreter.js --table interpreter0f
+
+                  # Generate analyzer code
+                  $NODE gen/generate_analyzer.js --table analyzer
+                  $NODE gen/generate_analyzer.js --table analyzer0f
+
+                  # Ensure all files were generated
+                  for f in jit.rs jit0f.rs interpreter.rs interpreter0f.rs analyzer.rs analyzer0f.rs; do
+                    if [ ! -f "src/rust/gen/$f" ]; then
+                      echo "Error: Failed to generate $f"
+                      exit 1
+                    fi
+                  done
+                '';
               };
             })
           ];
         };
-
-        # Common code generation function
-        generateCodeScript = ''
-          # Create gen output directory
-          mkdir -p src/rust/gen
-
-          # Generate JIT code
-          $NODE gen/generate_jit.js --table jit
-          $NODE gen/generate_jit.js --table jit0f
-
-          # Generate interpreter code
-          $NODE gen/generate_interpreter.js --table interpreter
-          $NODE gen/generate_interpreter.js --table interpreter0f
-
-          # Generate analyzer code
-          $NODE gen/generate_analyzer.js --table analyzer
-          $NODE gen/generate_analyzer.js --table analyzer0f
-
-          # Ensure all files were generated
-          for f in jit.rs jit0f.rs interpreter.rs interpreter0f.rs analyzer.rs analyzer0f.rs; do
-            if [ ! -f "src/rust/gen/$f" ]; then
-              echo "Error: Failed to generate $f"
-              exit 1
-            fi
-          done
-        '';
 
       in rec {
         packages = {
@@ -90,9 +93,6 @@
             # Setup closure compiler symlink
             mkdir -p closure-compiler
             ln -sf ${pkgs.closurecompiler}/share/java/closure-compiler-v*.jar closure-compiler/compiler.jar
-
-            # Generate code
-            ${generateCodeScript}
 
             echo "v86 development shell"
             echo "Available commands:"
