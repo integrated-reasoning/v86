@@ -1,7 +1,7 @@
 #![allow(non_upper_case_globals)]
-#![allow(static_mut_refs)]
+#![allow(static_mut_ref)]
 
-// Safety of allow(static_mut_refs) in this file:
+// Safety of allow(static_mut_ref) in this file:
 // These following two globals are not passed anywhere, only built-in function are called on them
 static mut dirty_bitmap: Vec<u64> = Vec::new();
 static mut dest_buffer: Vec<u32> = Vec::new();

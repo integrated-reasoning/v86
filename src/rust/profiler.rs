@@ -134,7 +134,7 @@ pub fn stat_increment_by(stat: stat, by: u64) {
 #[no_mangle]
 pub fn profiler_init() {
     unsafe {
-        #[allow(static_mut_refs)]
+        #[allow(static_mut_ref)]
         for x in stat_array.iter_mut() {
             *x = 0
         }
