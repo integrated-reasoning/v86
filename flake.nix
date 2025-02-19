@@ -35,8 +35,65 @@
           '';
         };
 
-        # Create a cargo2nix project
-        rustPkgs = pkgs.rustBuilder.makePackageSet {
+        # Create a cargo2nix project for native build
+        rustPkgsNative = pkgs.rustBuilder.makePackageSet {
+          rustChannel = "nightly";
+          packageFun = import ./Cargo.nix;
+          packageOverrides = pkgs: pkgs.rustBuilder.overrides.all ++ [
+            (pkgs.rustBuilder.rustLib.makeOverride {
+              name = "v86";
+              overrideAttrs = drv: {
+                # Add C dependencies
+                nativeBuildInputs = (drv.nativeBuildInputs or []) ++ (with pkgs; [
+                  llvmPackages_16.clang-unwrapped
+                  llvmPackages_16.libcxx
+                  nodejs
+                  nodePackages.npm
+                  closurecompiler
+                  gnumake
+                  jre
+                  nasm
+                  python3
+                  which
+                ]);
+                # Add code generation phase
+                preBuildPhases = (drv.preBuildPhases or []) ++ [ "generateCode" ];
+                generateCode = ''
+                  # Set up environment
+                  export NODE=${pkgs.nodejs}/bin/node
+
+                  # Create gen output directory
+                  mkdir -p src/rust/gen
+
+                  # Generate JIT code
+                  $NODE gen/generate_jit.js --table jit
+                  $NODE gen/generate_jit.js --table jit0f
+
+                  # Generate interpreter code
+                  $NODE gen/generate_interpreter.js --table interpreter
+                  $NODE gen/generate_interpreter.js --table interpreter0f
+
+                  # Generate analyzer code
+                  $NODE gen/generate_analyzer.js --table analyzer
+                  $NODE gen/generate_analyzer.js --table analyzer0f
+
+                  # Ensure all files were generated
+                  for f in jit.rs jit0f.rs interpreter.rs interpreter0f.rs analyzer.rs analyzer0f.rs; do
+                    if [ ! -f "src/rust/gen/$f" ]; then
+                      echo "Error: Failed to generate $f"
+                      exit 1
+                    fi
+                  done
+                '';
+                # Enable raw_ref_op feature
+                RUSTFLAGS = "-Z unstable-options --cfg feature=\"raw_ref_op\"";
+              };
+            })
+          ];
+        };
+
+        # Create a cargo2nix project for wasm build
+        rustPkgsWasm = pkgs.rustBuilder.makePackageSet {
           rustChannel = "nightly";
           packageFun = import ./Cargo.nix;
           packageOverrides = pkgs: pkgs.rustBuilder.overrides.all ++ [
@@ -47,8 +104,6 @@
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
                 # Add C dependencies
                 nativeBuildInputs = (drv.nativeBuildInputs or []) ++ (with pkgs; [
-                  llvmPackages_16.clang-unwrapped
-                  llvmPackages_16.libcxx
                   nodejs
                   nodePackages.npm
                   closurecompiler
@@ -117,12 +172,13 @@
 
       in rec {
         packages = {
-          v86 = (rustPkgs.workspace.v86 {}).bin;
-          default = packages.v86;
+          v86-native = (rustPkgsNative.workspace.v86 {}).bin;
+          v86-wasm = (rustPkgsWasm.workspace.v86 {}).bin;
+          default = packages.v86-native;
         };
 
         devShells.default = pkgs.mkShell {
-          inputsFrom = [ packages.v86 ];
+          inputsFrom = [ packages.v86-native ];
           buildInputs = with pkgs; [
             # Development tools
             rust-analyzer
